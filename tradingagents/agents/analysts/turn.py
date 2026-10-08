@@ -22,7 +22,22 @@ def take_turn(prompt, llm, tools, messages):
         # call may still try, and some providers then answer with nothing.
         prompt = prompt.partial(tool_names="none; your tool rounds are spent")
         result = (prompt | llm).invoke(_as_text(messages))
-        return result, result.content
+
+        content = result.content
+        if not content or (isinstance(content, str) and not content.strip()):
+            print("\n[DIAGNOSTIC] Analyst wrap-up returned empty content")
+            print(f"Model response type: {type(result).__name__}")
+            print(f"Finish reason: {result.response_metadata.get('finish_reason')}")
+            print(f"Content: {repr(content)}")
+            print(f"Usage: {result.usage_metadata}")
+            print(f"Additional kwargs: {result.additional_kwargs}")
+
+            raise RuntimeError(
+                "Analyst produced an empty report. "
+                "Check the model's output token limit and finish reason."
+    )
+
+        return result, content
     result = (prompt | llm.bind_tools(tools)).invoke(messages)
     return result, "" if result.tool_calls else result.content
 

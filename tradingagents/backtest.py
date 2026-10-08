@@ -74,6 +74,14 @@ def _alpha(entry: dict) -> float | None:
     except ValueError:
         return None
 
+def _raw_return(entry: dict) -> float | None:
+    """Actual stock return, stored as a rounded percentage in the memory log."""
+    text = (entry.get("raw") or "").strip().rstrip("%")
+    try:
+        return float(text) / 100
+    except ValueError:
+        return None
+
 
 @dataclass
 class BacktestResult:
@@ -95,6 +103,7 @@ class RatingScore:
     count: int
     hit_rate: float | None
     mean_alpha: float
+    price_hit_rate: float | None = None
 
 
 @dataclass
@@ -109,8 +118,17 @@ class BacktestSummary:
         lines = [f"Resolved cells: {self.resolved} · pending: {self.pending}"
                  + (f" · unscored: {self.unscored}" if self.unscored else "")]
         for rating, score in self.by_rating.items():
-            called = (f"called the direction {score.hit_rate:.0%}"
-                      if score.hit_rate is not None else "no direction claimed")
+            if score.hit_rate is None:
+                called = "no direction claimed"
+            else:
+                relative = f"{score.hit_rate:.0%} benchmark-relative accuracy"
+                price = (
+                    f"{score.price_hit_rate:.0%} price-direction accuracy"
+                    if score.price_hit_rate is not None
+                    else "price-direction accuracy unavailable"
+                )
+                called = f"{price}, {relative}"
+
             lines.append(
                 f"- {rating}: n={score.count}, {called}, "
                 f"mean alpha {score.mean_alpha:+.2%} vs the benchmark"
@@ -197,12 +215,27 @@ def summarize(source: BacktestResult | str | Path) -> BacktestSummary:
     resolved = [(e, a) for e, a in resolved if a is not None]
     by_rating: dict[str, RatingScore] = {}
     for rating in dict.fromkeys(e["rating"] for e, _ in resolved):
-        alphas = [a for e, a in resolved if e["rating"] == rating]
+        rating_entries = [(e, a) for e, a in resolved if e["rating"] == rating]
+        alphas = [a for _, a in rating_entries]
         direction = _DIRECTION.get(rating, 0)
+
+        raw_returns = [
+            raw
+            for e, _ in rating_entries
+            if (raw := _raw_return(e)) is not None
+        ]
+
         by_rating[rating] = RatingScore(
             count=len(alphas),
-            hit_rate=(sum(a * direction > 0 for a in alphas) / len(alphas)) if direction else None,
+            hit_rate=(
+                sum(a * direction > 0 for a in alphas) / len(alphas)
+                if direction else None
+            ),
             mean_alpha=sum(alphas) / len(alphas),
+            price_hit_rate=(
+                sum(raw * direction > 0 for raw in raw_returns) / len(raw_returns)
+                if direction and raw_returns else None
+            ),
         )
     unscored = sum(1 for e in entries if e["rating"] == RATING_REVIEW)
     # Report the window the outcomes were actually measured over, from the log.
