@@ -112,6 +112,63 @@ def test_a_failed_cell_does_not_abort_the_sweep(tmp_path):
     assert result.failures == [("NVDA", "2026-01-05", "vendor exploded")]
 
 
+@pytest.mark.unit
+def test_backtest_archives_reports_by_ticker_and_date(tmp_path, monkeypatch):
+    saved = []
+
+    def _save_reports(self, final_state, ticker, save_path=None, html=True):
+        saved.append((final_state, ticker, save_path, html))
+
+    monkeypatch.setattr(
+        _FakeGraph, "save_reports", _save_reports, raising=False
+    )
+
+    result = run_backtest(
+        ["NVDA"],
+        ["2026-01-05", "2026-01-12"],
+        _config(tmp_path),
+        run_id="archive_test",
+    )
+
+    assert result.cells_run == 2
+    assert result.failures == []
+    assert len(saved) == 2
+
+    for index, date in enumerate(["2026-01-05", "2026-01-12"]):
+        state, ticker, path, html = saved[index]
+
+        assert state["final_trade_decision"] == DECISION
+        assert ticker == "NVDA"
+        assert path == (
+            tmp_path
+            / "results"
+            / "backtest"
+            / "archive_test"
+            / "reports"
+            / f"NVDA_{date}"
+        )
+        assert html is False
+
+
+@pytest.mark.unit
+def test_report_archive_failure_does_not_fail_analysis(tmp_path, monkeypatch):
+    def _broken_archive(self, final_state, ticker, save_path=None, html=True):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(
+        _FakeGraph, "save_reports", _broken_archive, raising=False
+    )
+
+    result = run_backtest(
+        ["NVDA"], ["2026-01-05"], _config(tmp_path)
+    )
+
+    assert result.cells_run == 1
+    assert result.failures == []
+    assert result.log_path.exists()
+    assert _FakeGraph.instances[-1].settled == ["NVDA"]
+
+
 # --- reading the result ------------------------------------------------------
 
 def _log_with(tmp_path, rows):
@@ -304,3 +361,48 @@ def test_a_ticker_or_date_given_twice_runs_and_settles_once(tmp_path):
     graph = _FakeGraph.instances[-1]
     assert graph.calls == [("NVDA", "2026-01-05")]
     assert graph.settled == ["NVDA"]
+
+
+def test_price_direction_accuracy_is_separate_from_alpha():
+    from tradingagents.backtest import _DIRECTION, _raw_return
+
+    # The stock falls 2%, but SPY falls 4%.
+    # A bearish recommendation correctly predicts the price decline,
+    # but incorrectly predicts benchmark-relative underperformance.
+    entry = {"raw": "-2.0%", "alpha": "+2.0%"}
+    direction = _DIRECTION["Sell"]
+
+    assert _raw_return(entry) == -0.02
+    assert _raw_return(entry) * direction > 0
+    assert 0.02 * direction < 0
+
+    # A flat return is not a successful directional prediction.
+    assert _raw_return({"raw": "0.0%"}) * direction == 0
+
+    # Pending or unreadable returns should not be scored.
+    assert _raw_return({"raw": None}) is None
+    assert _raw_return({"raw": "pending"}) is None
+
+@pytest.mark.unit
+def test_summary_distinguishes_price_direction_from_relative_performance(tmp_path):
+    log = _log_with(tmp_path, [
+        # Stock falls 2%, but outperforms SPY by 2%.
+        # Correct price-direction call, incorrect relative-performance call.
+        ("AAPL", "2026-06-01", "Rating: Sell\n\nx", (-0.02, 0.02)),
+
+        # Stock falls 3% and underperforms SPY by 1%.
+        # Both predictions are correct.
+        ("AAPL", "2026-06-08", "Rating: Sell\n\nx", (-0.03, -0.01)),
+    ])
+
+    summary = summarize(log)
+    sells = summary.by_rating["Sell"]
+
+    assert sells.count == 2
+    assert sells.price_hit_rate == 1.0
+    assert sells.hit_rate == 0.5
+    assert round(sells.mean_alpha, 4) == 0.005
+
+    report = summary.render()
+    assert "100% price-direction accuracy" in report
+    assert "50% benchmark-relative accuracy" in report

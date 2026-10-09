@@ -756,10 +756,26 @@ class TestPortfolioManagerInjection:
         captured = {}
         llm = _structured_pm_llm(captured)
         pm_node = create_portfolio_manager(llm)
-        state = _make_pm_state(past_context="[2026-01-05 | NVDA | Buy | +5.0% | +2.0% | 5d]\nGreat call.")
+
+        state = _make_pm_state(
+            past_context=(
+                "[2026-01-05 | NVDA | Buy | +5.0% | +2.0% | 5d]\n"
+                "Great call."
+            )
+        )
         pm_node(state)
-        assert "Lessons from prior decisions and outcomes" in captured["prompt"]
-        assert "Great call." in captured["prompt"]
+
+        prompt = captured["prompt"]
+
+        # Historical memory is still available to the Portfolio Manager.
+        assert "Lessons from prior decisions and outcomes" in prompt
+        assert "Great call." in prompt
+
+        # Historical observations must not be treated as current market data.
+        assert "Historical-memory rules:" in prompt
+        assert "Do not treat historical prices, technical indicators" in prompt
+        assert "prioritize the current evidence" in prompt
+        assert "independently supported by the current analysis" in prompt
 
     def test_pm_no_past_context_no_section(self):
         """PM prompt omits the lessons section entirely when past_context is empty."""

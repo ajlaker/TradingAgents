@@ -34,7 +34,20 @@ def create_portfolio_manager(llm):
 
         past_context = state.get("past_context", "")
         lessons_line = (
-            f"- Lessons from prior decisions and outcomes:\n{past_context}\n"
+            "- Lessons from prior decisions and outcomes "
+            "(background context, not current market evidence):\n"
+            f"{past_context}\n"
+            "\n"
+            "Historical-memory rules:\n"
+            "- Use prior decisions and reflections to identify lessons about "
+            "reasoning, risk management, and past mistakes.\n"
+            "- Do not treat historical prices, technical indicators, price targets, "
+            "or market conditions as current observations.\n"
+            "- When historical memory conflicts with the current analysts' evidence, "
+            "prioritize the current evidence.\n"
+            "- Do not repeat numerical claims from historical memory unless "
+            "independently supported by the current analysis.\n"
+            "\n"
             if past_context
             else ""
         )

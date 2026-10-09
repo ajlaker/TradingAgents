@@ -1,11 +1,9 @@
 """Run the graph over a grid of tickers and dates, and score what came back.
-
 One run yields one decision, so it cannot say whether the system decides well.
 This runs the same machinery over many (ticker, date) cells and reads the
 aggregate. The memory log is the results table: every run already records its
 rating and later settles it with realized and alpha return against the
 instrument's regional benchmark, so there is nothing to record separately.
-
 Scope: this evaluates decision quality. It is not a portfolio simulator, and
 must not grow one. Turning a rating into a filled order needs a quantity, a fill
 price and a cash ledger, none of which the system has; inventing them here would
@@ -13,27 +11,20 @@ put an execution model behind an evaluation tool. Cells are therefore
 independent, and a portfolio, when given, is the same standing book for every
 cell rather than a position carried forward.
 """
-
 from __future__ import annotations
-
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-
 from tradingagents.agents.rating import RATING_REVIEW
 from tradingagents.dataflows.date_window import get_current_date
 from tradingagents.dataflows.symbols import safe_ticker_component
 from tradingagents.graph.trading_graph import TradingAgentsGraph
 from tradingagents.memory import TradingMemoryLog
-
 logger = logging.getLogger(__name__)
-
-
 def iter_grid(start_date: str, end_date: str, every_n_days: int = 1) -> list[str]:
     """Analysis dates from ``start_date``, never past today.
-
     A future date has no outcome to settle against, and the graph rejects one, so
     the grid stops at the present rather than producing cells that cannot score.
     """
@@ -42,15 +33,12 @@ def iter_grid(start_date: str, end_date: str, every_n_days: int = 1) -> list[str
         raise ValueError("every_n_days must be at least 1")
     if end < start:
         raise ValueError(f"the grid ends before it starts: {end_date} is before {start_date}")
-
     last = min(end, datetime.strptime(get_current_date(), "%Y-%m-%d"))
     dates, cursor = [], start
     while cursor <= last:
         dates.append(cursor.strftime("%Y-%m-%d"))
         cursor += timedelta(days=every_n_days)
     return dates
-
-
 def _canonical(date: str) -> datetime:
     """Parse a grid bound, rejecting anything the run date would also reject."""
     try:
@@ -60,11 +48,8 @@ def _canonical(date: str) -> datetime:
     if parsed.strftime("%Y-%m-%d") != str(date):
         raise ValueError(f"grid dates must be in YYYY-MM-DD format, got {date!r}")
     return parsed
-
-
 def _alpha(entry: dict) -> float | None:
     """Alpha return of a settled entry, or None when it has not settled.
-
     The log stores it as a percentage rounded to one decimal, so aggregates here
     are accurate to 0.1 of a percentage point, not to the raw quote.
     """
@@ -73,7 +58,6 @@ def _alpha(entry: dict) -> float | None:
         return float(text) / 100
     except ValueError:
         return None
-
 def _raw_return(entry: dict) -> float | None:
     """Actual stock return, stored as a rounded percentage in the memory log."""
     text = (entry.get("raw") or "").strip().rstrip("%")
@@ -81,8 +65,6 @@ def _raw_return(entry: dict) -> float | None:
         return float(text) / 100
     except ValueError:
         return None
-
-
 @dataclass
 class BacktestResult:
     run_id: str
@@ -91,21 +73,15 @@ class BacktestResult:
     skipped: int = 0
     failures: list[tuple[str, str, str]] = field(default_factory=list)
     settlement_failures: list[tuple[str, str]] = field(default_factory=list)
-
-
 # What each rating claims will happen, so an outcome can be scored against it.
 # Hold claims no direction, so nothing about alpha proves it right or wrong.
 _DIRECTION = {"Buy": 1, "Overweight": 1, "Hold": 0, "Underweight": -1, "Sell": -1}
-
-
 @dataclass
 class RatingScore:
     count: int
     hit_rate: float | None
     mean_alpha: float
     price_hit_rate: float | None = None
-
-
 @dataclass
 class BacktestSummary:
     resolved: int
@@ -113,7 +89,6 @@ class BacktestSummary:
     by_rating: dict[str, RatingScore]
     unscored: int = 0
     holding: str = ""
-
     def render(self) -> str:
         lines = [f"Resolved cells: {self.resolved} · pending: {self.pending}"
                  + (f" · unscored: {self.unscored}" if self.unscored else "")]
@@ -128,7 +103,6 @@ class BacktestSummary:
                     else "price-direction accuracy unavailable"
                 )
                 called = f"{price}, {relative}"
-
             lines.append(
                 f"- {rating}: n={score.count}, {called}, "
                 f"mean alpha {score.mean_alpha:+.2%} vs the benchmark"
@@ -142,8 +116,6 @@ class BacktestSummary:
             "these figures are indicative rather than repeatable."
         )
         return "\n".join(lines)
-
-
 def run_backtest(
     tickers: list[str],
     dates: list[str],
@@ -155,7 +127,6 @@ def run_backtest(
     progress: Callable[[int, int, str, str], None] | None = None,
 ) -> BacktestResult:
     """Analyze every ticker on every date, into a memory log of this run's own.
-
     The live log stays untouched: a sweep would otherwise flood the context that
     real runs read back. Cells already in this run's log are skipped, so an
     interrupted sweep resumes by being run again. ``progress(done, total,
@@ -168,11 +139,9 @@ def run_backtest(
     run_dir.mkdir(parents=True, exist_ok=True)
     run_config = {**config, "results_dir": str(run_dir),
                   "memory_log_path": str(run_dir / "trading_memory.md")}
-
     graph = TradingAgentsGraph(selected_analysts, config=run_config)
     result = BacktestResult(run_id=run_id, log_path=Path(run_config["memory_log_path"]))
     done = {(e["ticker"], e["date"]) for e in graph.memory_log.load_entries()}
-
     # A ticker or date given twice is one cell, run and settled once.
     tickers, dates = list(dict.fromkeys(tickers)), list(dict.fromkeys(dates))
     cells = [(ticker, date) for ticker in tickers for date in dates]
@@ -182,11 +151,21 @@ def run_backtest(
         if progress:
             progress(index, len(todo), ticker, date)
         try:
-            graph.propagate(ticker, date, asset_type, portfolio=portfolio)
+            final_state, _signal = graph.propagate(
+                ticker, date, asset_type, portfolio=portfolio
+            )
             result.cells_run += 1
-        except Exception as exc:  # one unreachable vendor must not end the sweep
+        except Exception as exc:
             logger.warning("Backtest cell %s %s failed: %s", ticker, date, exc)
             result.failures.append((ticker, date, str(exc)))
+            continue
+
+        # Archive failures must not turn a completed analysis into a failed cell.
+        try:
+            report_dir = run_dir / "reports" / f"{safe_ticker_component(ticker)}_{date}"
+            graph.save_reports(final_state, ticker, save_path=report_dir, html=False)
+        except Exception as exc:
+            logger.warning("Could not archive reports for %s on %s: %s", ticker, date, exc)
 
     # Settlement runs at the start of the next run for a ticker, so each ticker's
     # last cell would stay pending without this pass.
@@ -197,8 +176,6 @@ def run_backtest(
             logger.warning("Settling %s failed: %s", ticker, exc)
             result.settlement_failures.append((ticker, str(exc)))
     return result
-
-
 def summarize(source: BacktestResult | str | Path) -> BacktestSummary:
     """Score the settled decisions of a backtest, or of a memory log at a path, by rating."""
     if isinstance(source, BacktestResult):
@@ -218,13 +195,11 @@ def summarize(source: BacktestResult | str | Path) -> BacktestSummary:
         rating_entries = [(e, a) for e, a in resolved if e["rating"] == rating]
         alphas = [a for _, a in rating_entries]
         direction = _DIRECTION.get(rating, 0)
-
         raw_returns = [
             raw
             for e, _ in rating_entries
             if (raw := _raw_return(e)) is not None
         ]
-
         by_rating[rating] = RatingScore(
             count=len(alphas),
             hit_rate=(
